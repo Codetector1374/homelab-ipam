@@ -1,0 +1,137 @@
+# Apply secret.example.yaml only after replacing every example value.
+# Build/push the Dockerfile and replace this image before deployment.
+# SQLite requires a filesystem with reliable POSIX locks; use CSI block-backed
+# storage (e.g. ext4/xfs on a cloud disk), NOT NFS/SMB or object-storage mounts.
+# Set storageClassName to your block storage class if the default is unsuitable.
+# Keep one replica with Recreate; do not attach multiple writers to this volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: homelab-ipam-data
+spec:
+  accessModes: [ReadWriteOnce]
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homelab-ipam
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: homelab-ipam
+  template:
+    metadata:
+      labels:
+        app: homelab-ipam
+    spec:
+      automountServiceAccountToken: false
+      # The publishing workflow builds linux/amd64 images only.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ipam
+          image: ghcr.io/your-org/homelab-ipam:replace-with-built-tag
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: AUTH_MODE
+              value: oidc
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: '3000'
+            - name: DB_PATH
+              value: /data/ipam.db
+            - name: PUBLIC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-ipam-oidc
+                  key: PUBLIC_URL
+            - name: OIDC_ISSUER
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-ipam-oidc
+                  key: OIDC_ISSUER
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-ipam-oidc
+                  key: OIDC_CLIENT_ID
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-ipam-oidc
+                  key: OIDC_CLIENT_SECRET
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: homelab-ipam-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homelab-ipam
+spec:
+  selector:
+    app: homelab-ipam
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

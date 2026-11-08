@@ -1,0 +1,26 @@
+# Requires your ingress controller, DNS and an existing TLS Secret.
+# Match this hostname to PUBLIC_URL and the Kanidm callback exactly.
+# Terminate HTTPS here; preserve browser Origin/Host headers. Never expose the
+# backend Service directly to the Internet. Configure HTTP-to-HTTPS redirect in
+# your ingress controller (controller-specific, not configured by this example).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homelab-ipam
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ipam.example.com
+      secretName: ipam-example-com-tls
+  rules:
+    - host: ipam.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: homelab-ipam
+                port:
+                  name: http
